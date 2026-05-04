@@ -92,15 +92,35 @@
         }
 
         #magicCounter { color: #ff00ff; text-shadow: 0 0 10px #ff00ff; }
+        
+        /* Estilos para o campo de nome e ranking */
+        #playerName {
+            width: 250px; padding: 10px; margin-bottom: 15px; 
+            background: rgba(0,20,40,0.8); border: 2px solid #00f2ff; 
+            color: #fff; text-align: center; border-radius: 8px; outline: none; 
+            font-size: 1.1rem; font-family: 'Segoe UI', sans-serif;
+        }
+        #playerName::placeholder { color: rgba(255,255,255,0.5); }
+        #rankingContainer {
+            margin-top: 15px; width: 90%; max-width: 300px;
+            background: rgba(0,0,0,0.6); border-radius: 8px; padding: 10px;
+            border: 1px solid #00f2ff; max-height: 150px; overflow-y: auto;
+        }
+        .rank-item { font-size: 0.9rem; margin: 4px 0; color: #fff; }
     </style>
 </head>
 <body>
 
 <div id="menu" class="overlay">
     <h1>CHAOS SNAKE<br><small style="font-size: 1rem;">UNDERWATER SECTOR</small></h1>
+    
+    <input type="text" id="playerName" placeholder="Codinome do Mergulhador" maxlength="15">
+    
     <button class="btn" onclick="startNewGame()">NOVO MERGULHO</button>
     <button id="btnContinue" class="btn" onclick="continueGame()" disabled>CONTINUAR</button>
     <div class="stats">MAIOR PROFUNDIDADE: <span id="highScore">1</span></div>
+    
+    <div id="rankingContainer">Carregando Ranking Global...</div>
 </div>
 
 <div class="hud">
@@ -114,6 +134,61 @@
 <div id="msg">LEVEL UP!</div>
 <canvas id="gameCanvas"></canvas>
 
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyC51h09_bCOYycU3ETIQp5wUhyPRJzAS3g",
+      authDomain: "chaos-snake.firebaseapp.com",
+      projectId: "chaos-snake",
+      storageBucket: "chaos-snake.firebasestorage.app",
+      messagingSenderId: "249796273981",
+      appId: "1:249796273981:web:20623630ccfbbabb25c754"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    window.salvarNoRanking = async function(nome, nivel) {
+        if (!nome || nome.trim() === "") nome = "Anônimo";
+        try {
+            await db.collection("ranking").add({
+                nome: nome,
+                nivel: nivel,
+                data: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            console.log("Recorde enviado com sucesso!");
+        } catch (e) {
+            console.error("Erro ao salvar ranking: ", e);
+        }
+    };
+
+    window.carregarTop10 = async function() {
+        const rankingContainer = document.getElementById("rankingContainer");
+        try {
+            const snap = await db.collection("ranking").orderBy("nivel", "desc").limit(10).get();
+            let html = "<h3 style='margin: 0 0 10px 0; color: #00f2ff; font-size: 1rem;'>TOP 10 GLOBAL</h3>";
+            if (snap.empty) {
+                html += "<div class='rank-item'>Seja o primeiro a mergulhar!</div>";
+            } else {
+                let rank = 1;
+                snap.forEach((doc) => {
+                    const d = doc.data();
+                    html += `<div class="rank-item"><strong>${rank}º</strong> ${d.nome} - Zona ${d.nivel}</div>`;
+                    rank++;
+                });
+            }
+            rankingContainer.innerHTML = html;
+        } catch (e) {
+            console.error("Erro ao carregar o ranking global", e);
+            rankingContainer.innerHTML = "<div class='rank-item'>Não foi possível carregar o ranking.</div>";
+        }
+    };
+
+    // Carrega o placar assim que o Firebase estiver pronto
+    window.carregarTop10();
+</script>
+
 <script>
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
@@ -126,6 +201,16 @@ const highScoreEl = document.getElementById('highScore');
 const btnContinue = document.getElementById('btnContinue');
 const timerContainer = document.getElementById('timerContainer');
 const timeLeftEl = document.getElementById('timeLeft');
+const playerNameInput = document.getElementById('playerName');
+
+// Restaura o nome salvo localmente se o jogador já tiver jogado antes
+const savedName = localStorage.getItem('chaosSnakeName');
+if (savedName) playerNameInput.value = savedName;
+
+// Salva o nome automaticamente quando o jogador digita
+playerNameInput.addEventListener('input', () => {
+    localStorage.setItem('chaosSnakeName', playerNameInput.value);
+});
 
 // CARREGAMENTO DE IMAGENS
 const brickImg = new Image();
@@ -172,7 +257,7 @@ let chaosCrystalsCollected = 0;
 let levelTimer = null;
 let secondsRemaining = 60;
 
-let db;
+let db_local;
 const dbReq = indexedDB.open("ChaosSnakeDB_UW", 3); 
 
 dbReq.onupgradeneeded = e => {
@@ -181,13 +266,13 @@ dbReq.onupgradeneeded = e => {
 };
 
 dbReq.onsuccess = e => {
-    db = e.target.result;
+    db_local = e.target.result;
     checkSave();
 };
 
 function checkSave() {
-    if(!db) return;
-    const store = db.transaction("saves").objectStore("saves").get("current");
+    if(!db_local) return;
+    const store = db_local.transaction("saves").objectStore("saves").get("current");
     store.onsuccess = () => {
         if(store.result) {
             highScore = store.result.highScore || 1;
@@ -198,9 +283,9 @@ function checkSave() {
 }
 
 function saveProgresso() {
-    if(!db) return;
+    if(!db_local) return;
     if(level > highScore) highScore = level;
-    db.transaction("saves", "readwrite").objectStore("saves").put({
+    db_local.transaction("saves", "readwrite").objectStore("saves").put({
         id: "current", 
         highScore: highScore
     });
@@ -271,7 +356,7 @@ function createBubble(randomY = false) {
 
 function initLevel() {
     isDead = false; isPowerUp = false; powerTimer = 0; hunters = [];
-    spawnProtection = 75; // REFORÇO: Invulnerabilidade inicial aumentada
+    spawnProtection = 75; 
     wildCard = null;
     lastWildTime = Date.now();
     
@@ -281,7 +366,6 @@ function initLevel() {
     chaosCrystalsCollected = 0;
     crystalsEl.innerText = "0";
     
-    // LÓGICA DE ARENA FECHADA (6 EM 6 NÍVEIS)
     const isSpecialArena = (level % 6 === 0);
 
     if (isSpecialArena) {
@@ -295,7 +379,6 @@ function initLevel() {
         }
         savedIslands = []; 
     } else {
-        // Lógica Normal de Ilhas
         if (level % 2 !== 0 || savedIslands.length === 0) {
             obstacles = [];
             const numIslands = Math.min(Math.floor((level + 1) * 0.8), 8); 
@@ -429,7 +512,7 @@ function applyDamage(fatal = false) {
         shake = 20;
         createExplosion(snake[0].x, snake[0].y, "#ff0000"); 
         snake = snake.slice(0, Math.max(2, Math.floor(snake.length / 2)));
-        spawnProtection = 60; // REFORÇO: Invulnerabilidade ao levar dano
+        spawnProtection = 60; 
     } else {
         shake = 40; 
         isDead = true;
@@ -438,8 +521,18 @@ function applyDamage(fatal = false) {
         msgEl.innerText = fatal ? "OXIGÊNIO ESGOTADO!" : "PERDIDO NO ABISMO"; 
         msgEl.style.display = 'block';
         
-        setTimeout(() => { 
+        setTimeout(async () => { 
             saveProgresso();
+            
+            // LÓGICA DO RANKING GLOBAL AO PERDER
+            try {
+                const nomeParaSalvar = playerNameInput.value;
+                await window.salvarNoRanking(nomeParaSalvar, level);
+                await window.carregarTop10();
+            } catch(e) {
+                console.error("Erro ao atualizar ranking:", e);
+            }
+
             msgEl.style.display = 'none'; 
             menu.style.display = 'flex';
             document.querySelector('.hud').style.display = 'none';
@@ -451,16 +544,14 @@ function update() {
     if(!gameRunning || isDead) return;
     dir = nextDir;
 
-    // LÓGICA DE MOVIMENTO
     const isSpecialArena = (level % 6 === 0);
     let nextX = snake[0].x + dir.x;
     let nextY = snake[0].y + dir.y;
 
     if (isSpecialArena) {
-        // AJUSTE: Bordas funcionam como obstáculos em Arena Fechada
         if (nextX < 0 || nextX >= gridSize || nextY < 0 || nextY >= rows) {
             if (spawnProtection <= 0) applyDamage(); 
-            return; // Bloqueia o movimento para fora
+            return; 
         }
     } else {
         nextX = (nextX + gridSize) % gridSize;
@@ -649,7 +740,6 @@ function draw() {
     });
     ctx.restore();
 
-    // DESENHO DOS OBSTÁCULOS
     obstacles.forEach(o => {
         ctx.save();
         ctx.beginPath(); 
